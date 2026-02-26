@@ -384,7 +384,7 @@ def enviar_relatorio(
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"] = config.GMAIL_USER
-        msg["To"] = ", ".join(destinatarios)
+        msg["To"] = config.GMAIL_USER  # destinatários enviados via BCC (envelope SMTP)
 
         # Versão texto simples (fallback para clientes sem HTML)
         texto_simples = (
