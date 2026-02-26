@@ -12,6 +12,14 @@ Projeto independente de **Reinaldo Chaves** para monitoramento automatizado de p
 - Interface web **Streamlit** com formulário de inscrição e estatísticas dos dados coletados
 - Roda automaticamente via **GitHub Actions** (sem custo, sem servidor)
 
+## Inscreva-se para receber o relatório
+
+Receba o boletim diário no seu email sem precisar configurar nada. Acesse o formulário de inscrição:
+
+**[congreapp-monitor-jornalismo.streamlit.app](https://congreapp-monitor-jornalismo.streamlit.app/)**
+
+---
+
 ## Palavras-chave monitoradas
 
 `JORNALISMO` · `JORNALISTA` · `JORNALISTAS` · `COMUNICADORES` · `IMPRENSA` · `VERIFICADORES DE FATOS` · `CHECAGEM DE FATOS` · `FAKE NEWS` · `DESINFORMAÇÃO` · `TRANSPARÊNCIA NA INTERNET` · `LIBERDADE DE EXPRESSÃO E INFORMAÇÕES DE INTERESSE COLETIVO` · `TRANSPARÊNCIA DOS DADOS` · `ONGS`
@@ -214,7 +222,65 @@ git commit -m "Adicionar monitor legislativo"
 git push origin main
 ```
 
-> **Atenção:** ao fazer o upload pela interface web do GitHub, pastas que começam com ponto (`.github/`) não podem ser criadas via "Upload files". Use o git na linha de comando, ou crie o arquivo do workflow manualmente: **Add file → Create new file**, digite `.github/workflows/monitor.yml` no campo do nome e cole o conteúdo.
+> **Atenção:** ao fazer o upload pela interface web do GitHub, pastas que começam com ponto (`.github/`) não podem ser criadas via "Upload files". Use o git na linha de comando, ou crie o arquivo do workflow manualmente como descrito abaixo.
+
+### 4.2.1 — Criar o arquivo de agendamento (monitor.yml)
+
+O arquivo `.github/workflows/monitor.yml` é o responsável por dizer ao GitHub **quando e como** executar o monitor automaticamente. Sem ele, nada roda.
+
+**Localização obrigatória:** `.github/workflows/monitor.yml` — exatamente neste caminho, a partir da raiz do repositório.
+
+**Como criar via interface web do GitHub** (sem usar git na linha de comando):
+
+1. No repositório, clique em **Add file → Create new file**
+2. No campo do nome do arquivo (onde aparece o ícone de pasta), digite:
+   ```
+   .github/workflows/monitor.yml
+   ```
+   O GitHub reconhece as barras e cria as pastas automaticamente. Você verá `.github/` e `workflows/` aparecerem como diretórios separados enquanto digita.
+3. Na área de edição (abaixo), cole o conteúdo completo do arquivo:
+
+```yaml
+name: Monitor Legislativo
+
+on:
+  schedule:
+    - cron: "0 10 * * *"   # 10:00 UTC = 07:00 BRT
+  workflow_dispatch:        # execução manual pelo GitHub UI
+
+jobs:
+  monitorar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Executar monitor
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          PLANILHA_DADOS_ID: ${{ secrets.PLANILHA_DADOS_ID }}
+          PLANILHA_EMAILS_ID: ${{ secrets.PLANILHA_EMAILS_ID }}
+          ABA_DADOS: ${{ vars.ABA_DADOS }}
+          ABA_EMAILS: ${{ vars.ABA_EMAILS }}
+        run: python main.py --dias 1
+```
+
+4. Role até o fim da página e clique em **Commit changes**
+5. Na janela que aparecer, mantenha a opção **Commit directly to the `main` branch** selecionada
+6. Clique em **Commit changes** para confirmar
+
+O arquivo estará ativo imediatamente. O GitHub Actions passará a aparecer na aba **Actions** do repositório, e a primeira execução automática ocorrerá no horário configurado (padrão: 07h BRT).
+
+> **Nota sobre o YAML:** o formato YAML é sensível a indentação. Se copiar e colar alterar os espaços, o workflow falhará com erro de sintaxe. Use sempre 2 espaços por nível de indentação — nunca tabs.
 
 ### 4.3 Configurar os Secrets (credenciais sensíveis)
 
