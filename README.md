@@ -4,12 +4,12 @@ Projeto independente de **Reinaldo Chaves** para monitoramento automatizado de p
 
 ## O que faz
 
-- Coleta diária de proposições da **Câmara dos Deputados** (API v2 REST) e do **Senado Federal** (API Dados Abertos)
-- Filtra por **13 palavras-chave** relacionadas a jornalismo, imprensa, fake news, transparência e ONGs
+- Coleta de proposições de segunda a sábado, às 07h BRT, da **Câmara dos Deputados** (API v2 REST) e do **Senado Federal** (API Dados Abertos)
+- Filtra por **16 palavras-chave** relacionadas a jornalismo, imprensa, fake news, transparência e ONGs
 - **Deduplicação inteligente:** antes de gravar, compara com os dados já existentes na planilha — somente movimentações com `statusSituacao`, `statusOrgao` ou `statusData` diferentes são tratadas como novidade
 - Grava apenas as **novidades** em uma **planilha Google Sheets** (histórico cumulativo)
-- Envia **relatório HTML por email** via Gmail SMTP para todos os inscritos — **apenas quando há novidades**
-- Interface web **Streamlit** com formulário de inscrição e estatísticas dos dados coletados
+- Envia **relatório HTML personalizado por email** via Gmail SMTP para cada inscrito — **apenas quando há novidades** — com link direto para cancelar a assinatura
+- Interface web **Streamlit** com formulário de inscrição, página de cancelamento de assinatura e estatísticas dos dados coletados
 - Roda automaticamente via **GitHub Actions** (sem custo, sem servidor)
 
 ## Inscreva-se para receber o relatório
@@ -22,7 +22,7 @@ Receba o boletim diário no seu email sem precisar configurar nada. Acesse o for
 
 ## Palavras-chave monitoradas
 
-`JORNALISMO` · `JORNALISTA` · `JORNALISTAS` · `COMUNICADORES` · `IMPRENSA` · `VERIFICADORES DE FATOS` · `CHECAGEM DE FATOS` · `FAKE NEWS` · `DESINFORMAÇÃO` · `TRANSPARÊNCIA NA INTERNET` · `LIBERDADE DE EXPRESSÃO E INFORMAÇÕES DE INTERESSE COLETIVO` · `TRANSPARÊNCIA DOS DADOS` · `ONGS`
+`JORNALISMO` · `JORNALISTA` · `JORNALISTAS` · `COMUNICADORES` · `IMPRENSA` · `MÍDIA` · `COMUNICAÇÃO SOCIAL` · `LIBERDADE DE IMPRENSA` · `VERIFICADORES DE FATOS` · `CHECAGEM DE FATOS` · `FAKE NEWS` · `DESINFORMAÇÃO` · `TRANSPARÊNCIA NA INTERNET` · `LIBERDADE DE EXPRESSÃO E INFORMAÇÕES DE INTERESSE COLETIVO` · `TRANSPARÊNCIA DOS DADOS` · `ONGS`
 
 ## Arquitetura
 
@@ -40,7 +40,7 @@ Receba o boletim diário no seu email sem precisar configurar nada. Acesse o for
                     └─────────┬───────────┘
                               │ gspread (leitura/escrita)
 ┌─────────────────────────────▼──────────────────────────┐
-│  main.py (GitHub Actions — todo dia às 07h BRT)        │
+│  main.py (GitHub Actions — seg a sáb às 07h BRT)       │
 │  1. Lê movimentações já existentes na planilha          │
 │  2. Coleta Câmara + Senado                             │
 │  3. Filtra apenas movimentações novas (deduplicação)   │
@@ -245,8 +245,8 @@ name: Monitor Legislativo
 
 on:
   schedule:
-    - cron: "0 10 * * *"   # 10:00 UTC = 07:00 BRT
-  workflow_dispatch:        # execução manual pelo GitHub UI
+    - cron: "0 10 * * 1-6"  # 10:00 UTC = 07:00 BRT — seg a sáb
+  workflow_dispatch:         # execução manual pelo GitHub UI
 
 jobs:
   monitorar:
@@ -361,20 +361,21 @@ Nenhuma linha será gravada e nenhum email será enviado.
 
 ### 5.5 Execução automática
 
-O workflow está configurado para rodar **todo dia às 10:00 UTC (07:00 de Brasília)**. Para alterar, edite [.github/workflows/monitor.yml](.github/workflows/monitor.yml):
+O workflow está configurado para rodar **de segunda a sábado às 10:00 UTC (07:00 de Brasília)**. Para alterar, edite [.github/workflows/monitor.yml](.github/workflows/monitor.yml):
 
 ```yaml
 schedule:
-  - cron: '0 10 * * *'   # 10:00 UTC = 07:00 BRT
+  - cron: '0 10 * * 1-6'  # 10:00 UTC = 07:00 BRT — seg a sáb
 ```
 
 Outros exemplos de cron:
 
 | Cron | Horário BRT |
 |---|---|
-| `0 12 * * *` | 09:00 BRT |
-| `0 14 * * *` | 11:00 BRT |
-| `0 12 * * 1-5` | 09:00 BRT, apenas dias úteis (seg–sex) |
+| `0 10 * * *` | 07:00 BRT, todos os dias |
+| `0 12 * * *` | 09:00 BRT, todos os dias |
+| `0 10 * * 1-5` | 07:00 BRT, apenas dias úteis (seg–sex) |
+| `0 10 * * 1-6` | 07:00 BRT, seg a sáb (configuração atual) |
 
 > O cron do GitHub Actions pode ter atraso de 5 a 30 minutos em relação ao horário programado — isso é normal.
 
@@ -421,12 +422,20 @@ ABA_EMAILS = "emails"
 4. Acesse a URL e teste o formulário: insira um email válido e clique em **Inscrever-se**
 5. Verifique se o email apareceu na aba `emails` da planilha do Google Sheets
 
-### 6.5 Comportamento do formulário
+### 6.5 Comportamento do formulário e cancelamento
 
 - **Inscrição nova:** exibe mensagem verde de sucesso e salva o email na planilha
 - **Email duplicado:** exibe aviso amarelo informando que já está cadastrado (verificação case-insensitive)
 - **Email inválido:** exibe erro vermelho pedindo email válido
 - A autenticação com o Google Sheets ocorre uma única vez por processo (cache via `@st.cache_resource`)
+
+**Cancelamento de assinatura:** cada email recebido contém um link personalizado de cancelamento no rodapé. Ao clicar, o leitor é levado para a URL:
+
+```
+https://congreapp-monitor-jornalismo.streamlit.app/?action=unsubscribe&email=SEU_EMAIL
+```
+
+O app detecta os parâmetros, remove o email da planilha automaticamente (uma única vez por sessão, via `st.session_state`) e exibe confirmação. O cancelamento também pode ser feito manualmente pela mesma página, sem precisar de um link pré-preenchido.
 
 ### 6.6 Atualizar o deploy
 
@@ -493,9 +502,13 @@ streamlit run app.py
 8. **Senado Federal incluído** — novo módulo usando API Dados Abertos com busca em ementa + indexação oficial
 9. **GitHub Actions** — sem dependência de Heroku (gratuito, sem servidor)
 10. **Gmail SMTP** — envio direto via App Password, sem serviços pagos (SendGrid, Mailgun)
-11. **Formulário de inscrição** — `app.py` (Streamlit) para cadastro de novos destinatários
+11. **Formulário de inscrição + cancelamento** — `app.py` (Streamlit) para cadastro e remoção de destinatários; link de cancelamento personalizado em cada email (`?action=unsubscribe&email=...`)
 12. **Deduplicação inteligente** — lê as movimentações já existentes antes de gravar; só registra e emaila quando há `statusSituacao`, `statusOrgao` ou `statusData` realmente novos, evitando ruído desnecessário
 13. **Estatísticas no app** — `app.py` exibe total de proposições únicas, split Câmara/Senado, período e contagem por tema, com cache de 1 hora
+14. **Palavras-chave ampliadas** — de 13 para 16 termos, com adição de `MÍDIA`, `COMUNICAÇÃO SOCIAL` e `LIBERDADE DE IMPRENSA` para melhor cobertura da API do Senado
+15. **Senado: dupla fonte de dados** — pipeline agora combina `/materia/atualizadas` (movimentações recentes) com `/materia/pesquisa/lista` (todas as matérias do ano), deduplicando por `CodigoMateria`; janela de busca mínima ampliada de 3 para 7 dias
+16. **Email individualizado** — relatório é enviado separadamente para cada destinatário (uma conexão SMTP, N envios), permitindo links de cancelamento personalizados por email
+17. **Agendamento seg–sáb** — GitHub Actions configurado para `1-6` (segunda a sábado), cobrindo sábados quando há sessões extraordinárias
 
 ## Fontes de Dados
 
