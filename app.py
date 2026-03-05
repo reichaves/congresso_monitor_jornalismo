@@ -94,6 +94,26 @@ def _carregar_estatisticas() -> dict | None:
     }
 
 
+def remover_inscrito(email: str) -> tuple[bool, str]:
+    try:
+        cliente = _autenticar_sheets()
+        planilha = cliente.open_by_key(_get_secret("PLANILHA_EMAILS_ID"))
+        aba = planilha.worksheet(_get_secret("ABA_EMAILS", "emails"))
+        valores = aba.col_values(1)
+        email_normalizado = email.strip().lower()
+        linha_encontrada = None
+        for i, valor in enumerate(valores, start=1):
+            if valor.strip().lower() == email_normalizado:
+                linha_encontrada = i
+                break
+        if linha_encontrada is None:
+            return False, "Email não encontrado na lista de inscritos."
+        aba.delete_rows(linha_encontrada)
+        return True, "Inscrição cancelada com sucesso."
+    except Exception as e:
+        return False, f"Erro ao cancelar inscrição ({type(e).__name__}): {e}"
+
+
 def adicionar_inscrito(email: str) -> tuple[bool, str]:
     try:
         cliente = _autenticar_sheets()
@@ -306,6 +326,49 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- Cancelamento de inscrição via URL params ---
+_params = st.query_params
+if _params.get("action") == "unsubscribe":
+    # Streamlit já decodifica URL automaticamente (ex: %40 → @)
+    email_param = _params.get("email", "").strip()
+    st.markdown("""
+<div style="background:#fff3f3;border:1px solid #e74c3c;border-radius:8px;padding:20px 24px;margin-bottom:24px;">
+    <h3 style="color:#c0392b;margin-top:0;">Cancelar inscrição</h3>
+""", unsafe_allow_html=True)
+    if email_param and "@" in email_param:
+        # Processa apenas uma vez por sessão (evita reprocessamento em reruns do Streamlit)
+        _session_key = f"unsub_{email_param}"
+        if _session_key not in st.session_state:
+            _ok, _msg = remover_inscrito(email_param)
+            st.session_state[_session_key] = (_ok, _msg)
+        _ok, _msg = st.session_state[_session_key]
+        if _ok:
+            st.success(f"Inscrição cancelada para **{email_param}**. Você não receberá mais o relatório diário.")
+        else:
+            if "não encontrado" in _msg:
+                st.info(f"O email **{email_param}** não está na lista de inscritos.")
+            else:
+                st.error(_msg)
+    else:
+        st.markdown(
+            '<p>Informe o email cadastrado para cancelar a inscrição:</p>',
+            unsafe_allow_html=True,
+        )
+        with st.form("form_cancelar"):
+            email_cancelar = st.text_input("Email", placeholder="voce@exemplo.com", label_visibility="collapsed")
+            submitted_cancelar = st.form_submit_button("Cancelar inscrição")
+        if submitted_cancelar:
+            if email_cancelar and "@" in email_cancelar:
+                ok, msg = remover_inscrito(email_cancelar.strip())
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+            else:
+                st.error("Informe um email válido.")
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.divider()
+
 # Hero
 st.markdown("""
 <div class="hero">
@@ -393,12 +456,15 @@ st.markdown("""
 <p style="font-size:0.88rem;color:#7f8c8d;margin-top:0.75rem">Ao se inscrever acima, você passará a receber o relatório diário automaticamente.</p>
 """, unsafe_allow_html=True)
 
-with st.expander("Temas monitorados (13 palavras-chave)"):
+with st.expander("Temas monitorados (16 palavras-chave)"):
     st.markdown(
         """
 - Jornalismo / Jornalista / Jornalistas
 - Comunicadores
 - Imprensa
+- Mídia
+- Comunicação social
+- Liberdade de imprensa
 - Verificadores de fatos
 - Checagem de fatos
 - Fake news
@@ -423,6 +489,6 @@ Os dados são públicos e disponibilizados pelas próprias casas legislativas.
 st.markdown("""
 <div class="footer">
     Projeto independente de <strong>Reinaldo Chaves</strong> ·
-    <a href="https://github.com/reichaves/congresso-monitor" target="_blank">Repositório e documentação completa</a>
+    <a href="https://github.com/reichaves/congresso_monitor_jornalismo" target="_blank">Repositório e documentação completa</a>
 </div>
 """, unsafe_allow_html=True)
