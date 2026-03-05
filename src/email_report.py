@@ -11,10 +11,14 @@ import smtplib
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from urllib.parse import quote
 
 from . import config
 
 logger = logging.getLogger(__name__)
+
+
+_STREAMLIT_URL = "https://congreapp-monitor-jornalismo.streamlit.app/"
 
 
 def _gerar_html_relatorio(
@@ -23,6 +27,7 @@ def _gerar_html_relatorio(
     data_inicio: str,
     data_fim: str,
     stats_planilha: dict | None = None,
+    email_destinatario: str = "",
 ) -> str:
     """Gera o corpo HTML do relatório por email."""
     total = len(resultados_camara) + len(resultados_senado)
@@ -254,16 +259,35 @@ def _gerar_html_relatorio(
     </div>
 """
 
-    # Palavras-chave monitoradas
+    # Palavras-chave monitoradas + links de rodapé
     keywords_str = ", ".join(config.PALAVRAS_CHAVE)
+
+    cancelar_url = ""
+    if email_destinatario:
+        cancelar_url = (
+            f"{_STREAMLIT_URL}?action=unsubscribe&email={quote(email_destinatario)}"
+        )
+
     html += f"""
     <div class="rodape">
         <strong>Palavras-chave monitoradas:</strong>
         <div class="keywords-lista">{keywords_str}</div>
         <br>
         Projeto independente de Reinaldo Chaves.<br>
-        Dados: API da C&acirc;mara dos Deputados (v2) e Dados Abertos do Senado Federal.
-    </div>
+        Dados: API da C&acirc;mara dos Deputados (v2) e Dados Abertos do Senado Federal.<br><br>
+        <a href="{_STREAMLIT_URL}" style="color:#2980b9;">&#127968; Acessar o Monitor Legislativo</a>
+        &nbsp;&nbsp;|&nbsp;&nbsp;
+        <a href="https://docs.google.com/spreadsheets/d/1GJ03OC8B7G3DBDCfvaZHx5RQDUAauuxDmhaxKy5Yq04/edit?usp=sharing" style="color:#2980b9;">&#128203; Planilha de dados</a>
+        &nbsp;&nbsp;|&nbsp;&nbsp;
+        <a href="https://github.com/reichaves/congresso_monitor_jornalismo" style="color:#2980b9;">&#128279; Veja o c&oacute;digo do projeto</a>
+"""
+
+    if cancelar_url:
+        html += f"""        &nbsp;&nbsp;|&nbsp;&nbsp;
+        <a href="{cancelar_url}" style="color:#c0392b;font-size:11px;">Cancelar inscri&ccedil;&atilde;o</a>
+"""
+
+    html += """    </div>
 </div>
 </body>
 </html>"""
@@ -374,45 +398,39 @@ def enviar_relatorio(
     else:
         subject = f"Monitor Legislativo — Nenhuma proposição em {data_formatada}"
 
-    html_body = _gerar_html_relatorio(
-        resultados_camara, resultados_senado, data_inicio, data_fim,
-        stats_planilha=stats_planilha,
+    texto_simples = (
+        f"Monitor Legislativo — {total} proposição(ões) encontrada(s)\n"
+        f"Período: {data_inicio} a {data_fim}\n\n"
+        "Este email contém um relatório em HTML. "
+        "Abra em um cliente de email que suporte HTML para visualizá-lo.\n\n"
+        f"Acesse o Monitor Legislativo: {_STREAMLIT_URL}"
     )
 
+    enviados = 0
     try:
-        # Montar mensagem MIME multipart/alternative (texto + HTML)
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = config.GMAIL_USER
-        msg["To"] = config.GMAIL_USER  # destinatários enviados via BCC (envelope SMTP)
-
-        # Versão texto simples (fallback para clientes sem HTML)
-        texto_simples = (
-            f"Monitor Legislativo — {total} proposição(ões) encontrada(s)\n"
-            f"Período: {data_inicio} a {data_fim}\n\n"
-            "Este email contém um relatório em HTML. "
-            "Abra em um cliente de email que suporte HTML para visualizá-lo."
-        )
-        msg.attach(MIMEText(texto_simples, "plain", "utf-8"))
-        msg.attach(MIMEText(html_body, "html", "utf-8"))
-
-        # Conectar e enviar via Gmail SMTP (TLS na porta 587)
         with smtplib.SMTP(config.SMTP_SERVER, config.SMTP_PORT) as servidor:
             servidor.ehlo()
             servidor.starttls()
             servidor.ehlo()
             servidor.login(config.GMAIL_USER, config.GMAIL_APP_PASSWORD)
-            servidor.sendmail(
-                config.GMAIL_USER,
-                destinatarios,
-                msg.as_string(),
-            )
 
-        logger.info(
-            "Email — enviado com sucesso para %d destinatário(s) via Gmail SMTP",
-            len(destinatarios),
-        )
-        return True
+            for dest in destinatarios:
+                html_body = _gerar_html_relatorio(
+                    resultados_camara, resultados_senado, data_inicio, data_fim,
+                    stats_planilha=stats_planilha,
+                    email_destinatario=dest,
+                )
+                msg = MIMEMultipart("alternative")
+                msg["Subject"] = subject
+                msg["From"] = config.GMAIL_USER
+                msg["To"] = dest
+                msg.attach(MIMEText(texto_simples, "plain", "utf-8"))
+                msg.attach(MIMEText(html_body, "html", "utf-8"))
+                try:
+                    servidor.sendmail(config.GMAIL_USER, [dest], msg.as_string())
+                    enviados += 1
+                except smtplib.SMTPException as exc:
+                    logger.error("Erro SMTP ao enviar para %s: %s", dest, exc)
 
     except smtplib.SMTPAuthenticationError as exc:
         logger.error(
@@ -421,8 +439,14 @@ def enviar_relatorio(
         )
         return False
     except smtplib.SMTPException as exc:
-        logger.error("Erro SMTP ao enviar email: %s", exc)
+        logger.error("Erro SMTP ao conectar: %s", exc)
         return False
     except Exception as exc:
         logger.error("Erro inesperado ao enviar email: %s", exc)
         return False
+
+    logger.info(
+        "Email — enviado com sucesso para %d/%d destinatário(s) via Gmail SMTP",
+        enviados, len(destinatarios),
+    )
+    return enviados > 0
