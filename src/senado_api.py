@@ -9,14 +9,10 @@ Particularidades da API do Senado:
 - JSON profundamente aninhado e pode ser dict (1 item) ou list (N itens)
 - Campo IndexacaoMateria contém palavras-chave oficiais do Senado
 
-Esquemas de campo por endpoint:
-  /materia/atualizadas → campos aninhados:
-    IdentificacaoMateria.CodigoMateria, .SiglaSubtipoMateria, .NumeroMateria, .AnoMateria
-    DadosBasicosMateria.EmentaMateria, .IndexacaoMateria, .DataApresentacao
-  /materia/pesquisa/lista → campos planos:
-    Codigo, Sigla, Numero, Ano, Ementa, Data
-    (sem IndexacaoMateria nesse endpoint)
-  A função _normalizar_materia() unifica ambos os esquemas em campos _privados.
+Formatos de resposta por endpoint:
+- /materia/atualizadas: nested (IdentificacaoMateria.CodigoMateria, DadosBasicosMateria.EmentaMateria, ...)
+- /materia/pesquisa/lista: flat (Codigo, Ementa, Autor, Data, ...)
+- _normalizar_materia() unifica os dois formatos em chaves comuns
 """
 
 import logging
@@ -66,39 +62,41 @@ def _extrair_campo(dicionario: dict, *chaves: str, padrao: str = "") -> str:
     return str(atual) if atual is not None else padrao
 
 
-# ---------------------------------------------------------------------------
-# Normalização: unifica os dois esquemas de campo em campos _privados
-# ---------------------------------------------------------------------------
 def _normalizar_materia(mat: dict) -> dict:
-    """Adiciona campos _privados normalizados ao dict da matéria.
+    """Normaliza a matéria para um formato flat comum, independente do endpoint.
 
-    Suporta dois esquemas retornados pelos endpoints do Senado:
-    - /materia/atualizadas  → campos aninhados em IdentificacaoMateria /
-                               DadosBasicosMateria
-    - /materia/pesquisa/lista → campos planos: Codigo, Sigla, Ementa, etc.
+    O endpoint /materia/atualizadas retorna estrutura nested:
+      IdentificacaoMateria.CodigoMateria, DadosBasicosMateria.EmentaMateria, etc.
+
+    O endpoint /materia/pesquisa/lista retorna estrutura flat:
+      Codigo, Ementa, Autor, Data, etc.
+
+    Após normalização, os campos CodigoMateria, EmentaMateria, IndexacaoMateria,
+    SiglaSubtipoMateria, NumeroMateria, AnoMateria, DataApresentacao e _AutorRaw
+    estão disponíveis no nível raiz do dict.
     """
-    # Esquema 1: atualizadas (campos aninhados)
-    ident = mat.get("IdentificacaoMateria", {})
-    dados = mat.get("DadosBasicosMateria", {})
-
-    if ident:
-        mat["_codigo"] = str(ident.get("CodigoMateria") or "")
-        mat["_sigla"] = str(ident.get("SiglaSubtipoMateria") or "")
-        mat["_numero"] = str(ident.get("NumeroMateria") or "")
-        mat["_ano"] = str(ident.get("AnoMateria") or "")
-        mat["_ementa_busca"] = str(dados.get("EmentaMateria") or "")
-        mat["_indexacao_busca"] = str(dados.get("IndexacaoMateria") or "")
-        mat["_data_apresentacao"] = str(dados.get("DataApresentacao") or "")
-    else:
-        # Esquema 2: pesquisa/lista (campos planos)
-        mat["_codigo"] = str(mat.get("Codigo") or "")
-        mat["_sigla"] = str(mat.get("Sigla") or "")
-        mat["_numero"] = str(mat.get("Numero") or "")
-        mat["_ano"] = str(mat.get("Ano") or "")
-        mat["_ementa_busca"] = str(mat.get("Ementa") or mat.get("EmentaMateria") or "")
-        mat["_indexacao_busca"] = str(mat.get("IndexacaoMateria") or "")
-        mat["_data_apresentacao"] = str(mat.get("Data") or mat.get("DataApresentacao") or "")
-
+    if "IdentificacaoMateria" in mat:
+        # Formato atualizadas: nested
+        ident = mat.get("IdentificacaoMateria", {})
+        dados = mat.get("DadosBasicosMateria", {})
+        mat.setdefault("CodigoMateria", ident.get("CodigoMateria", ""))
+        mat.setdefault("SiglaSubtipoMateria", ident.get("SiglaSubtipoMateria", ""))
+        mat.setdefault("NumeroMateria", ident.get("NumeroMateria", ""))
+        mat.setdefault("AnoMateria", ident.get("AnoMateria", ""))
+        mat.setdefault("EmentaMateria", dados.get("EmentaMateria", ""))
+        mat.setdefault("IndexacaoMateria", dados.get("IndexacaoMateria", ""))
+        mat.setdefault("DataApresentacao", dados.get("DataApresentacao", ""))
+        mat.setdefault("_AutorRaw", dados.get("Autor", ""))
+    elif "Codigo" in mat:
+        # Formato pesquisa/lista: flat
+        mat.setdefault("CodigoMateria", mat.get("Codigo", ""))
+        mat.setdefault("SiglaSubtipoMateria", mat.get("Sigla", ""))
+        mat.setdefault("NumeroMateria", mat.get("Numero", ""))
+        mat.setdefault("AnoMateria", mat.get("Ano", ""))
+        mat.setdefault("EmentaMateria", mat.get("Ementa", ""))
+        mat.setdefault("IndexacaoMateria", "")  # não disponível em pesquisa/lista
+        mat.setdefault("DataApresentacao", mat.get("Data", ""))
+        mat.setdefault("_AutorRaw", mat.get("Autor", ""))
     return mat
 
 
@@ -113,13 +111,9 @@ def coletar_materias_atualizadas(
 
     Usa /materia/atualizadas.json que retorna matérias com ações
     legislativas recentes — ideal para monitoramento periódico.
-    Limite máximo aceito pela API: 30 dias.
     """
     if num_dias is None:
         num_dias = config.SENADO_DIAS_ATUALIZADAS
-
-    # API retorna HTTP 400 para numdias > 30
-    num_dias = min(num_dias, 30)
 
     url = f"{config.SENADO_API_BASE}/materia/atualizadas{_JSON}"
     params = {"numdias": num_dias}
@@ -138,15 +132,15 @@ def coletar_materias_atualizadas(
 
     dados = resp.json()
 
-    # Navegar estrutura aninhada do Senado
-    # Campos aninhados: IdentificacaoMateria / DadosBasicosMateria
     lista_container = (
         dados
         .get("ListaMateriasAtualizadas", {})
         .get("Materias", {})
     )
-    materias = _garantir_lista(lista_container.get("Materia"))
-    materias = [_normalizar_materia(m) for m in materias]
+    materias = [
+        _normalizar_materia(m)
+        for m in _garantir_lista(lista_container.get("Materia"))
+    ]
 
     logger.info("Senado — %d matérias atualizadas encontradas", len(materias))
     return materias
@@ -155,25 +149,20 @@ def coletar_materias_atualizadas(
 def coletar_materias_pesquisa(
     sessao: requests.Session,
     ano: int | None = None,
-    tramitando: bool | None = None,
+    tramitando: bool = True,
 ) -> list[dict]:
     """Busca matérias via /materia/pesquisa/lista.json.
 
-    Usado como fonte principal de busca. Retorna campos PLANOS (não
-    aninhados): Codigo, Sigla, Numero, Ano, Ementa, Data.
-    A API ignora parâmetros de busca textual — filtragem é local.
-    tramitando=None busca todas (sem filtro), maximizando a cobertura.
+    Usado como complemento quando o endpoint de atualizadas
+    não retorna volume suficiente.
     """
     if ano is None:
         ano = datetime.now().year
 
     url = f"{config.SENADO_API_BASE}/materia/pesquisa/lista{_JSON}"
     params = {"ano": ano}
-    if tramitando is True:
+    if tramitando:
         params["tramitando"] = "S"
-    elif tramitando is False:
-        params["tramitando"] = "N"
-    # tramitando=None → sem parâmetro → retorna todas
 
     headers = {"Accept": "application/json"}
 
@@ -195,8 +184,10 @@ def coletar_materias_pesquisa(
         .get("PesquisaBasicaMateria", {})
         .get("Materias", {})
     )
-    materias = _garantir_lista(lista_container.get("Materia"))
-    materias = [_normalizar_materia(m) for m in materias]
+    materias = [
+        _normalizar_materia(m)
+        for m in _garantir_lista(lista_container.get("Materia"))
+    ]
 
     logger.info("Senado — %d matérias encontradas na pesquisa", len(materias))
     return materias
@@ -208,10 +199,9 @@ def coletar_materias_pesquisa(
 def filtrar_materias(materias: list[dict]) -> list[dict]:
     """Filtra matérias do Senado por palavras-chave.
 
-    Usa os campos normalizados _ementa_busca e _indexacao_busca
-    preenchidos por _normalizar_materia(), que suporta ambos os
-    esquemas de campo da API (atualizadas e pesquisa/lista).
+    Busca tanto na ementa quanto na indexação oficial.
     A API do Senado NÃO tem busca textual — filtro é local.
+    Requer que as matérias já tenham sido normalizadas por _normalizar_materia().
     """
     padrao = re.compile(
         "|".join(re.escape(p) for p in config.PALAVRAS_CHAVE),
@@ -220,8 +210,8 @@ def filtrar_materias(materias: list[dict]) -> list[dict]:
 
     resultado = []
     for mat in materias:
-        ementa = mat.get("_ementa_busca", "")
-        indexacao = mat.get("_indexacao_busca", "")
+        ementa = _extrair_campo(mat, "EmentaMateria")
+        indexacao = _extrair_campo(mat, "IndexacaoMateria")
         texto_busca = f"{ementa} {indexacao}".upper()
 
         matches = padrao.findall(texto_busca)
@@ -243,10 +233,13 @@ def _classificar_tema(texto_upper: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Enriquecimento: detalhes, movimentações, textos
+# Enriquecimento: detalhes, situação atual, textos
 # ---------------------------------------------------------------------------
 def _buscar_detalhes_materia(sessao: requests.Session, codigo: str) -> dict:
-    """Busca detalhes completos via /materia/{codigo}.json."""
+    """Busca detalhes via /materia/{codigo}.json.
+
+    Retorna DetalheMateria.Materia com DadosBasicosMateria.Autor e Assunto (quando disponível).
+    """
     url = f"{config.SENADO_API_BASE}/materia/{codigo}{_JSON}"
     headers = {"Accept": "application/json"}
 
@@ -283,7 +276,6 @@ def _buscar_textos_materia(sessao: requests.Session, codigo: str) -> str:
         textos = _garantir_lista(textos_container.get("Texto"))
 
         if textos:
-            # Pega a URL do primeiro texto disponível
             return _extrair_campo(textos[0], "UrlTexto")
         return ""
     except requests.RequestException as exc:
@@ -291,61 +283,74 @@ def _buscar_textos_materia(sessao: requests.Session, codigo: str) -> str:
         return ""
 
 
-def _extrair_autores(detalhes: dict) -> str:
-    """Extrai nomes dos autores do detalhe da matéria."""
-    autoria = detalhes.get("Autoria", {})
-    autores = _garantir_lista(autoria.get("Autor"))
+def _buscar_situacao_materia(sessao: requests.Session, codigo: str) -> dict:
+    """Busca situação atual via /materia/situacaoatual/{codigo}.json.
 
-    nomes = []
-    for autor in autores:
-        nome = _extrair_campo(autor, "NomeAutor")
-        if not nome:
-            nome = _extrair_campo(autor, "DescricaoTipoAutor")
-        if nome:
-            uf = _extrair_campo(autor, "UfAutor")
-            partido = _extrair_campo(autor, "SiglaPartidoAutor")
-            partes = [nome]
-            if partido:
-                partes.append(f"({partido}")
-                if uf:
-                    partes[-1] += f"/{uf})"
-                else:
-                    partes[-1] += ")"
-            nomes.append(" ".join(partes))
+    Retorna dict com:
+      - descricao: DescricaoSituacao (ex: "AGUARDANDO DESIGNAÇÃO DO RELATOR")
+      - local: SiglaLocal do comitê/órgão atual (ex: "CDIR")
+      - data: data da situação ou do local atual
+    """
+    url = f"{config.SENADO_API_BASE}/materia/situacaoatual/{codigo}{_JSON}"
+    headers = {"Accept": "application/json"}
 
-    return "; ".join(nomes)
+    try:
+        resp = sessao.get(url, headers=headers, timeout=config.HTTP_TIMEOUT)
+        resp.raise_for_status()
+        dados = resp.json()
 
+        mat_list = _garantir_lista(
+            dados
+            .get("SituacaoAtualMateria", {})
+            .get("Materias", {})
+            .get("Materia")
+        )
+        if not mat_list:
+            return {}
 
-def _extrair_situacao(detalhes: dict) -> dict:
-    """Extrai informações de situação atual da matéria."""
-    situacao = detalhes.get("SituacaoAtual", {}).get("Audesp", {})
-    if not situacao:
-        situacao = detalhes.get("SituacaoAtual", {})
+        situacao_atual = mat_list[0].get("SituacaoAtual", {})
+        autuacoes = _garantir_lista(
+            situacao_atual.get("Autuacoes", {}).get("Autuacao")
+        )
+        if not autuacoes:
+            return {}
 
-    return {
-        "descricao": _extrair_campo(situacao, "DescricaoSituacao"),
-        "local": _extrair_campo(situacao, "Local", "NomeCasaLocal"),
-        "data": _extrair_campo(situacao, "DataSituacao"),
-    }
+        ultima = autuacoes[-1]
+
+        # DescricaoSituacao — presente apenas para matérias em tramitação
+        situacoes = _garantir_lista(ultima.get("Situacoes", {}).get("Situacao"))
+        descricao = ""
+        data_situacao = ""
+        if situacoes:
+            ultima_sit = situacoes[-1]
+            descricao = ultima_sit.get("DescricaoSituacao", "")
+            data_situacao = ultima_sit.get("DataSituacao", "")
+
+        # Local legislativo (comissão/plenário); fallback para local administrativo
+        local = ultima.get("Local") or ultima.get("LocalAdministrativo") or {}
+        sigla_local = local.get("SiglaLocal", "")
+        data_local = local.get("DataLocal", "")
+
+        return {
+            "descricao": descricao,
+            "local": sigla_local,
+            "data": data_situacao or data_local,
+        }
+    except requests.RequestException as exc:
+        logger.warning("Erro ao buscar situação da matéria %s: %s", codigo, exc)
+        return {}
 
 
 def enriquecer_materias(
     sessao: requests.Session,
     materias: list[dict],
 ) -> list[dict]:
-    """Enriquece matérias filtradas com detalhes, textos e autores.
-
-    Usa os campos _privados normalizados por _normalizar_materia().
-    Os detalhes completos são buscados via /materia/{codigo}.json,
-    que tem estrutura: DetalheMateria.Materia.IdentificacaoMateria /
-    DadosBasicosMateria (independente da fonte original).
-    """
+    """Enriquece matérias filtradas com detalhes, situação atual, textos e autores."""
     enriquecidas = []
     total = len(materias)
 
     for idx, mat in enumerate(materias, 1):
-        # Usa campo normalizado — funciona para atualizadas e pesquisa/lista
-        codigo = mat.get("_codigo", "")
+        codigo = _extrair_campo(mat, "CodigoMateria")
         if not codigo:
             continue
 
@@ -357,38 +362,41 @@ def enriquecer_materias(
         url_texto = _buscar_textos_materia(sessao, codigo)
         time.sleep(config.HTTP_DELAY_ENTRE_REQUESTS)
 
-        autores = _extrair_autores(detalhes) if detalhes else ""
-        situacao = _extrair_situacao(detalhes) if detalhes else {}
+        situacao = _buscar_situacao_materia(sessao, codigo)
+        time.sleep(config.HTTP_DELAY_ENTRE_REQUESTS)
 
-        # Preferir dados do detalhe (mais completos) e cair nos normalizados
-        det_ident = detalhes.get("IdentificacaoMateria", {}) if detalhes else {}
-        det_dados = detalhes.get("DadosBasicosMateria", {}) if detalhes else {}
+        # Autores: vem de DadosBasicosMateria.Autor no detail endpoint (string simples)
+        # com fallback para _AutorRaw normalizado da fonte original (atualizadas/pesquisa)
+        autores = (
+            _extrair_campo(detalhes, "DadosBasicosMateria", "Autor")
+            or mat.get("_AutorRaw", "")
+        )
 
-        sigla = det_ident.get("SiglaSubtipoMateria") or mat.get("_sigla", "")
-        numero = det_ident.get("NumeroMateria") or mat.get("_numero", "")
-        ano = det_ident.get("AnoMateria") or mat.get("_ano", "")
-        ementa = det_dados.get("EmentaMateria") or mat.get("_ementa_busca", "")
-        data_apresentacao = det_dados.get("DataApresentacao") or mat.get("_data_apresentacao", "")
-        indexacao = det_dados.get("IndexacaoMateria") or mat.get("_indexacao_busca", "")
+        # temas_api: Assunto.AssuntoEspecifico.Descricao
+        # Disponível no endpoint atualizadas (mat) e no detail (detalhes) para alguns
+        temas_api = (
+            _extrair_campo(mat, "Assunto", "AssuntoEspecifico", "Descricao")
+            or _extrair_campo(detalhes, "Assunto", "AssuntoEspecifico", "Descricao")
+        )
 
         registro = {
             "data_consulta": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "casa": "Senado",
             "id": codigo,
-            "siglaTipo": sigla,
-            "numero": numero,
-            "ano": ano,
-            "ementa": ementa,
-            "dataApresentacao": data_apresentacao,
+            "siglaTipo": _extrair_campo(mat, "SiglaSubtipoMateria"),
+            "numero": _extrair_campo(mat, "NumeroMateria"),
+            "ano": _extrair_campo(mat, "AnoMateria"),
+            "ementa": _extrair_campo(mat, "EmentaMateria"),
+            "dataApresentacao": _extrair_campo(mat, "DataApresentacao"),
             "statusSituacao": situacao.get("descricao", ""),
             "statusOrgao": situacao.get("local", ""),
             "statusData": situacao.get("data", ""),
             "keywords_encontradas": ", ".join(mat.get("_keywords_encontradas", [])),
             "urlInteiroTeor": url_texto,
             "autores": autores,
-            "temas_api": _extrair_campo(detalhes, "Assunto", "AssuntoEspecifico"),
+            "temas_api": temas_api,
             "tema_monitoramento": mat.get("_tema_monitoramento", ""),
-            "indexacao_oficial": indexacao,
+            "indexacao_oficial": _extrair_campo(mat, "IndexacaoMateria"),
             "pagina_proposicao": (
                 f"https://www25.senado.leg.br/web/atividade/materias/-/"
                 f"materia/{codigo}"
@@ -407,36 +415,35 @@ def enriquecer_materias(
 def executar_coleta(data_inicio: str, data_fim: str) -> list[dict]:
     """Executa pipeline: coletar → filtrar → enriquecer.
 
-    Fontes combinadas para máxima cobertura:
-    - /materia/atualizadas (máx. 30 dias) — movimentação recente
-    - /materia/pesquisa/lista (ano corrente, sem filtro tramitando) — todas as matérias do ano
-    data_inicio/data_fim são usados para calcular numdias de atualizadas.
+    Usa /materia/atualizadas como fonte principal e complementa com
+    /materia/pesquisa/lista para o ano corrente (fonte mais abrangente).
+    data_inicio/data_fim são usados para calcular numdias.
     """
     logger.info("=== SENADO: Coleta de %s a %s ===", data_inicio, data_fim)
 
     sessao = criar_sessao_http()
 
-    # Calcular número de dias; a API aceita no máximo 30
+    # Calcular número de dias entre as datas
     try:
         dt_inicio = datetime.strptime(data_inicio, "%Y-%m-%d")
         dt_fim = datetime.strptime(data_fim, "%Y-%m-%d")
+        # Usa pelo menos SENADO_DIAS_ATUALIZADAS para garantir cobertura suficiente
         num_dias = max((dt_fim - dt_inicio).days, config.SENADO_DIAS_ATUALIZADAS)
-        num_dias = min(num_dias, 30)  # limite da API
     except ValueError:
         num_dias = config.SENADO_DIAS_ATUALIZADAS
 
     # 1a. Fonte principal: matérias com movimentação recente
     materias_atualizadas = coletar_materias_atualizadas(sessao, num_dias=num_dias)
 
-    # 1b. Fonte complementar: todas as matérias do ano (tramitando=None → sem filtro)
+    # 1b. Fonte complementar: pesquisa por ano (captura proposições sem movimentação recente)
     ano_atual = datetime.now().year
-    materias_pesquisa = coletar_materias_pesquisa(sessao, ano=ano_atual, tramitando=None)
+    materias_pesquisa = coletar_materias_pesquisa(sessao, ano=ano_atual, tramitando=False)
 
-    # Mesclar e deduplicar pelo campo normalizado _codigo
+    # Mesclar e deduplicar por CodigoMateria (já normalizado)
     codigos_vistos: set[str] = set()
     materias_combinadas: list[dict] = []
     for mat in materias_atualizadas + materias_pesquisa:
-        cod = mat.get("_codigo", "")
+        cod = _extrair_campo(mat, "CodigoMateria")
         if cod and cod not in codigos_vistos:
             codigos_vistos.add(cod)
             materias_combinadas.append(mat)
